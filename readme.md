@@ -1,5 +1,7 @@
 # Big Mapper
-This is a utility for pico8, designed for editing map data. It will eventually be expanded upon, allowing you to edit and save to the pico8 extended memory.
+This is a utility for pico8, designed for editing map data. It will eventually be expanded upon, allowing you to edit and save to the pico8 extended memory. Its current major feature is allowing you to edit maps at 256x256 pixels, giving you a lot of breathing room.
+
+![bigmapper_image](bigmapper_image.png)
 
 ## Setup
 This cannot be run standalone - it must be run from the pico8 desktop client.
