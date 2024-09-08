@@ -1,7 +1,11 @@
 -- TODO:
--- px9 implementation
--- save, load, and select slots
--- detect number of saves, auto save to end
+-- save, load, and select slots - working
+-- detect number of saves, auto save to end - working
+-- way to define size of map to save px9 workload
+-- autotiling method
+-- memswapping - send to working cart, save locally, export, etc
+-- decide on address or lengths saved at end of memory - throw warning if length too high
+-- drawing utils - quick block fill
 
 
 function _init()
@@ -13,11 +17,29 @@ function _init()
     poke(0x5f57,0) -- map width. 256. yuge.
     
     camera_all(0,0)
+
+	--clear extended
+	-- memset(0x8000,0,0x7fff)
+    -- poke(0xffff,0)
+	--clear regular
+	--memset(0x2000,0,0x1000)
+	-- memset(0x3000,0,0x0100)
+
+	--maptest
+	xbound=16--256
+	ybound=16--127
+	-- for xx=0,xbound-1,1 do mset(xx,0,1) mset(xx,ybound-1,1) end
+	-- for yy=0,ybound-1,1 do mset(0,yy,1) mset(xbound-1,yy,1) end
     
     -- mapping vars
     current_tile = 0
     undo_stack = {}
     viewgrid = true
+
+	current_address = 0x2000
+    len_address = 0x2fff
+	address_list = {}
+	current_level_ix = 0
 
     -- control vars
     -- mouse
@@ -41,8 +63,16 @@ function _update()
     
 
     -- keyboard
-    if (check_key("5")) save_local()
+	if (check_key("1")) compress_map_to_location()
+	if (check_key("2")) decompress_from_memory_to_map()
+	if (check_key("3")) cycle_current_level_ix()
+
     if (check_key("4")) save_export()
+    if (check_key("5")) save_local()
+
+	if (check_key("6")) delete_current_ix()
+    if (check_key("7")) clear_working_map()
+    if (check_key("8")) clear_longterm_memory()
 
     if (check_key("g")) viewgrid = not viewgrid
     if (check_key("b")) bucket = not bucket
@@ -50,9 +80,83 @@ function _update()
 
 end
 
+function clear_working_map()
+    memset(0x8000,0,0x7fff)
+    poke(0xffff,0)
+end
+
+function clear_longterm_memory()
+    memset(0x2000,0,0x1000)
+end
+
+function delete_current_ix()
+	dst = 0x6000
+	mem_add=0
+	new_list = {}
+	for i=1,#address_list,1 do
+		src, len = address_list[i][1],address_list[i][2]
+		if i < current_level_ix then
+			memcpy(dst,src,len)
+			mem_add += len
+			dst += len
+			add(new_list,{src,len})
+		elseif i > current_level_ix then
+			memcpy(dst,src,len)
+			src = 0x2000 + (dst-0x6000)
+			mem_add += len
+			dst += len
+			add(new_list,{src,len})
+		end
+	end
+	--clean map
+	memset(0x2000,0,0x0fff)
+	-- copy back
+	memcpy(0x2000,0x6000,dst-0x6000)
+	address_list = new_list
+	popup("deleted "..current_level_ix)
+end
+
+function compress_map_to_location()
+	-- regular map is at 0x2000
+	length = px9_comp(0,0,xbound,ybound,current_address,mget)
+	add(address_list,{current_address,length})
+	popup("Level len "..length)
+	current_address += length
+end
+
+function popup(str)
+	for i=1,30,1 do
+		rectfill(30,30,90,90,7)
+		print(str,34,45,0)
+		flip()
+	end
+end
+
+
+function decompress_from_memory_to_map()
+	if #address_list==0 then 
+		source = 0x2000
+	else
+		source = address_list[current_level_ix][1]
+	end
+	source=0x2000
+	-- first clear the map
+	memset(0x8000,0,0x7fff)
+	-- decomp from regular map memory
+	px9_decomp(0,0,source,mget,mset)
+end
+
+function cycle_current_level_ix()
+	if #address_list == 0 then
+		current_level_ix = 0
+		return
+	end
+	current_level_ix = (current_level_ix % #address_list) + 1
+end
+
 function fill_tile()
-    local xx = mx\8
-    local yy = my\8
+    local xx = mousex\8
+    local yy = mousey\8
     local tt = mget(xx,yy)
     local tnew = current_tile
     if (tt != tnew) flood(xx,yy,tnew,tt)
@@ -62,9 +166,9 @@ function flood(xx,yy,tnew,tt)
     local t_here = mget(xx,yy)
     if (t_here != tt) return
     if (xx<0) return
-    if (xx>127) return
+    if (xx>255) return
     if (yy<0) return
-    if (yy>63) return
+    if (yy>127) return
     add_undo(xx,yy)
     mset(xx,yy,tnew)
     -- _draw()
@@ -107,19 +211,19 @@ function undo()
 end
 
 function dropper_tile()
-    local xx = mx\8
-    local yy = my\8
-    if xx>=0 and xx < 128 and yy>=0 and yy < 64 then
+    local xx = mousex\8
+    local yy = mousey\8
+    if xx>=0 and xx < 256 and yy>=0 and yy < 128 then
         current_tile = mget(xx,yy)
     end
 end
 
 function place_tile()
-    local xx = mx\8
-    local yy = my\8
+    local xx = mousex\8
+    local yy = mousey\8
     local t_here=mget(xx,yy)
     if (t_here==current_tile) return
-    if xx>=0 and xx < 128 and yy>=0 and yy < 64 then
+    if xx>=0 and xx < 256 and yy>=0 and yy < 128 then
         add_undo(xx,yy)
         mset(xx,yy,current_tile)
     end
@@ -140,7 +244,7 @@ function draw_all()
     palt(0)
     map()
     grid()
-    circfill(mx,my,2,7)
+    circfill(mousex,mousey,2,7)
     palt()
 end
 
@@ -152,10 +256,10 @@ function grid()
     gridy=16
     gcolor=6
     for xx=gridoffx,255,gridx do
-        line(xx*8,0,xx*8,64*8,gcolor)
+        line(xx*8,0,xx*8,128*8,gcolor)
     end
     for yy=gridoffy,127,gridy do
-        line(0,yy*8,128*8,yy*8,gcolor)
+        line(0,yy*8,256*8,yy*8,gcolor)
     end
 end
 
@@ -165,7 +269,7 @@ function camera_all(x,y)
 end
 
 function controls()
-    move_speed = movespeed
+    move_speed = movespeed*2
     -- ESDF for camera
     if (btn(0,1)) camx += -move_speed
     if (btn(1,1)) camx += move_speed
@@ -221,6 +325,10 @@ function draw_status()
     else
         print("point",1,102,7)
     end
+	print(mousex\8,30,102,7)
+	print(mousey\8,48,102,7)
+	print("address: "..current_address,1,110,7)
+	print("ix: "..current_level_ix,1,118,7)
 end
 
 -- control stuff
@@ -261,8 +369,8 @@ function update_mouse()
 
     mxraw = stat(32)
     myraw = stat(33)
-    mx = stat(32) + camx
-	my = stat(33) + camy
+    mousex = stat(32) + camx
+	mousey = stat(33) + camy
 end
 
 
@@ -273,6 +381,7 @@ end
 -- CREDIT TO ZEP & CO
 
 -- px9 decompress
+-- by zep
 
 -- x0,y0 where to draw to
 -- src   compressed data address
@@ -280,279 +389,268 @@ end
 -- vset  write function (x,y,v)
 
 function
-	px9_decomp(x0,y0,src,vget,vset)
+    px9_decomp(x0,y0,src,vget,vset)
 
-	local function vlist_val(l, val)
-		-- find position and move
-		-- to head of the list
+    local function vlist_val(l, val)
+        -- find position
+        for i=1,#l do
+            if l[i]==val then
+                for j=i,2,-1 do
+                    l[j]=l[j-1]
+                end
+                l[1] = val
+                return i
+            end
+        end
+    end
 
---[ 2-3x faster than block below
-		local v,i=l[1],1
-		while v!=val do
-			i+=1
-			v,l[i]=l[i],v
-		end
-		l[1]=val
---]]
+    -- bit cache is between 16 and 
+    -- 31 bits long with the next
+    -- bit always aligned to the
+    -- lsb of the fractional part
+    local cache,cache_bits=0,0
+    function getval(bits)
+        if cache_bits<16 then
+            -- cache next 16 bits
+            cache+=%src>>>16-cache_bits
+            cache_bits+=16
+            src+=2
+        end
+        -- clip out the bits we want
+        -- and shift to integer bits
+        local val=cache<<32-bits>>>16-bits
+        -- now shift those bits out
+        -- of the cache
+        cache=cache>>>bits
+        cache_bits-=bits
+        return val
+    end
 
---[[ 7 tokens smaller than above
-		for i,v in ipairs(l) do
-			if v==val then
-				add(l,deli(l,i),1)
-				return
-			end
-		end
---]]
-	end
+    -- get number plus n
+    function gnp(n)
+        local bits=0
+        repeat
+            bits+=1
+            local vv=getval(bits)
+            n+=vv
+        until vv<(1<<bits)-1
+        return n
+    end
 
-	-- bit cache is between 8 and
-	-- 15 bits long with the next
-	-- bits in these positions:
-	--   0b0000.12345678...
-	-- (1 is the next bit in the
-	--   stream, 2 is the next bit
-	--   after that, etc.
-	--  0 is a literal zero)
-	local cache,cache_bits=0,0
-	function getval(bits)
-		if cache_bits<8 then
-			-- cache next 8 bits
-			cache_bits+=8
-			cache+=@src>>cache_bits
-			src+=1
-		end
+    -- header
 
-		-- shift requested bits up
-		-- into the integer slots
-		cache<<=bits
-		local val=cache&0xffff
-		-- remove the integer bits
-		cache^^=val
-		cache_bits-=bits
-		return val
-	end
+    local 
+        w,h_1,      -- w,h-1
+        eb,el,pr,
+        x,y,
+        splen,
+        predict
+        =
+        gnp"1",gnp"0",
+        gnp"1",{},{},
+        0,0,
+        0
+        --,nil
 
-	-- get number plus n
-	function gnp(n)
-		local bits=0
-		repeat
-			bits+=1
-			local vv=getval(bits)
-			n+=vv
-		until vv<(1<<bits)-1
-		return n
-	end
+    for i=1,gnp"1" do
+        add(el,getval(eb))
+    end
+    for y=y0,y0+h_1 do
+        for x=x0,x0+w-1 do
+            splen-=1
 
-	-- header
+            if(splen<1) then
+                splen,predict=gnp"1",not predict
+            end
 
-	local
-		w,h_1,      -- w,h-1
-		eb,el,pr,
-		x,y,
-		splen,
-		predict
-		=
-		gnp"1",gnp"0",
-		gnp"1",{},{},
-		0,0,
-		0
-		--,nil
+            local a=y>y0 and vget(x,y-1) or 0
 
-	for i=1,gnp"1" do
-		add(el,getval(eb))
-	end
-	for y=y0,y0+h_1 do
-		for x=x0,x0+w-1 do
-			splen-=1
+            -- create vlist if needed
+            local l=pr[a]
+            if not l then
+                l={}
+                for e in all(el) do
+                    add(l,e)
+                end
+                pr[a]=l
+            end
 
-			if(splen<1) then
-				splen,predict=gnp"1",not predict
-			end
+            -- grab index from stream
+            -- iff predicted, always 1
 
-			local a=y>y0 and vget(x,y-1) or 0
+            local v=l[predict and 1 or gnp"2"]
 
-			-- create vlist if needed
-			local l=pr[a] or {unpack(el)}
-			pr[a]=l
+            -- update predictions
+            vlist_val(l, v)
+            vlist_val(el, v)
 
-			-- grab index from stream
-			-- iff predicted, always 1
+            -- set
+            vset(x,y,v)
 
-			local v=l[predict and 1 or gnp"2"]
-
-			-- update predictions
-			vlist_val(l, v)
-			vlist_val(el, v)
-
-			-- set
-			vset(x,y,v)
-		end
-	end
+            -- advance
+            x+=1
+            y+=x\w
+            x%=w
+        end
+    end
 end
 
 -- px9 compress
+-- by zep
 
 -- x0,y0 where to read from
 -- w,h   image width,height
 -- dest  address to store
 -- vget  read function (x,y)
 
-function
+function 
 	px9_comp(x0,y0,w,h,dest,vget)
-
-	local dest0=dest
-	local bit=1
-	local byte=0
-
-	local function vlist_val(l, val)
-		-- find position and move
-		-- to head of the list
-
---[ 2-3x faster than block below
-		local v,i=l[1],1
-		while v!=val do
-			i+=1
-			v,l[i]=l[i],v
-		end
-		l[1]=val
-		return i
---]]
-
---[[ 8 tokens smaller than above
-		for i,v in ipairs(l) do
-			if v==val then
-				add(l,deli(l,i),1)
-				return i
+	
+		local dest0=dest
+		local bit=1 
+		local byte=0
+	
+		local function vlist_val(l, val)
+			-- find positon
+			for i=1,#l do
+				if l[i] == val then
+					-- jump to top
+					for j=i,2,-1 do
+						l[j]=l[j-1]
+					end
+					l[1] = val
+					return i
+				end
 			end
 		end
---]]
-	end
-
-	local cache,cache_bits=0,0
-	function putbit(bval)
-	 cache=cache<<1|bval
-	 cache_bits+=1
-		if cache_bits==8 then
-			poke(dest,cache)
-			dest+=1
-			cache,cache_bits=0,0
-		end
-	end
-
-	function putval(val, bits)
-		for i=bits-1,0,-1 do
-			putbit(val>>i&1)
-		end
-	end
-
-	function putnum(val)
-		local bits = 0
-		repeat
-			bits += 1
-			local mx=(1<<bits)-1
-			local vv=min(val,mx)
-			putval(vv,bits)
-			val -= vv
-		until vv<mx
-	end
-
-
-	-- first_used
-
-	local el={}
-	local found={}
-	local highest=0
-	for y=y0,y0+h-1 do
-		for x=x0,x0+w-1 do
-			c=vget(x,y)
-			if not found[c] then
-				found[c]=true
-				add(el,c)
-				highest=max(highest,c)
+	
+		function putbit(bval)
+			if (bval) byte+=bit 
+			poke(dest, byte) bit<<=1
+			if (bit==256) then
+				bit=1 byte=0
+				dest += 1
 			end
 		end
-	end
-
-	-- header
-
-	local bits=1
-	while highest >= 1<<bits do
-		bits+=1
-	end
-
-	putnum(w-1)
-	putnum(h-1)
-	putnum(bits-1)
-	putnum(#el-1)
-	for i=1,#el do
-		putval(el[i],bits)
-	end
-
-
-	-- data
-
-	local pr={} -- predictions
-
-	local dat={}
-
-	for y=y0,y0+h-1 do
-		for x=x0,x0+w-1 do
-			local v=vget(x,y)
-
-			local a=y>y0 and vget(x,y-1) or 0
-
-			-- create vlist if needed
-			local l=pr[a] or {unpack(el)}
-			pr[a]=l
-
-			-- add to vlist
-			add(dat,vlist_val(l,v))
-			
-			-- and to running list
-			vlist_val(el, v)
-		end
-	end
-
-	-- write
-	-- store bit-0 as runtime len
-	-- start of each run
-
-	local nopredict
-	local pos=1
-
-	while pos <= #dat do
-		-- count length
-		local pos0=pos
-
-		if nopredict then
-			while dat[pos]!=1 and pos<=#dat do
-				pos+=1
-			end
-		else
-			while dat[pos]==1 and pos<=#dat do
-				pos+=1
+	
+		function putval(val, bits)
+			for i=0,bits-1 do
+				putbit(val&1<<i > 0)
 			end
 		end
-
-		local splen = pos-pos0
-		putnum(splen-1)
-
-		if nopredict then
-			-- values will all be >= 2
-			while pos0 < pos do
-				putnum(dat[pos0]-2)
-				pos0+=1
+	
+		function putnum(val)
+			local bits = 0
+			repeat
+				bits += 1
+				local mx=(1<<bits)-1
+				local vv=min(val,mx)
+				putval(vv,bits)
+				val -= vv
+			until vv<mx
+		end
+	
+	
+		-- first_used
+	
+		local el={}
+		local found={}
+		local highest=0
+		for y=y0,y0+h-1 do
+			for x=x0,x0+w-1 do
+				c=vget(x,y)
+				if not found[c] then
+					found[c]=true
+					add(el,c)
+					highest=max(highest,c)
+				end
 			end
 		end
-
-		nopredict=not nopredict
+	
+		-- header
+	
+		local bits=1
+		while highest >= 1<<bits do
+			bits+=1
+		end
+	
+		putnum(w-1)
+		putnum(h-1)
+		putnum(bits-1)
+		putnum(#el-1)
+		for i=1,#el do
+			putval(el[i],bits)
+		end
+	
+	
+		-- data
+	
+		local pr={} -- predictions
+	
+		local dat={}
+	
+		for y=y0,y0+h-1 do
+			for x=x0,x0+w-1 do
+				local v=vget(x,y)  
+	
+				local a=0
+				if (y>y0) a+=vget(x,y-1)
+	
+				-- create vlist if needed
+				local l=pr[a]
+				if not l then
+					l={}
+					for i=1,#el do
+						l[i]=el[i]
+					end
+					pr[a]=l
+				end
+	
+				-- add to vlist
+				add(dat,vlist_val(l,v))
+			   
+				-- and to running list
+				vlist_val(el, v)
+			end
+		end
+	
+		-- write
+		-- store bit-0 as runtime len
+		-- start of each run
+	
+		local nopredict
+		local pos=1
+	
+		while pos <= #dat do
+			-- count length
+			local pos0=pos
+	
+			if nopredict then
+				while dat[pos]!=1 and pos<=#dat do
+					pos+=1
+				end
+			else
+				while dat[pos]==1 and pos<=#dat do
+					pos+=1
+				end
+			end
+	
+			local splen = pos-pos0
+			putnum(splen-1)
+	
+			if nopredict then
+				-- values will all be >= 2
+				while pos0 < pos do
+					putnum(dat[pos0]-2)
+					pos0+=1
+				end
+			end
+	
+			nopredict=not nopredict
+		end
+	
+		if (bit!=1) dest+=1 -- flush
+	
+		return dest-dest0
 	end
-
-	if cache_bits>0 then
-		-- flush
-		poke(dest,cache<<8-cache_bits)
-		dest+=1
-	end
-
-	return dest-dest0
-end
+	
